@@ -1,97 +1,112 @@
 /**
  * Dependencies
  */
-const net = require('net');
-const mes = require('./message');
+var net        = require('net');
+var mes        = require('./message');
 
 /**
- * WebSocket to TCP proxy
+ * Constructor
  */
-class Proxy {
-	constructor(ws) {
-		this.ws = ws;
-		this.tcp = null;
-		this.target = ws.upgradeReq.url.substr(1);
-		this.from = ws.upgradeReq.connection.remoteAddress;
+var Proxy = function Constructor(ws) {
+	const to = ws.upgradeReq.url.substr(1);
+	this._tcp;
+	this._from = ws.upgradeReq.connection.remoteAddress;
+	this._to   = Buffer.from(to, 'base64').toString();
+	this._ws   = ws;
 
-		// Bind event handlers
-		this.ws.on('message', this.handleClientData.bind(this));
-		this.ws.on('close', this.close.bind(this));
-		this.ws.on('error', this.close.bind(this));
+	// Bind data
+	this._ws.on('message', this.clientData.bind(this) );
+	this._ws.on('close', this.close.bind(this) );
+	this._ws.on('error', (error) => {
+		console.log(error);
+	});
 
-		// Connect to target server
-		this.connect();
+	// Initialize proxy
+	var args = this._to.split(':');
+
+	// Connect to server
+	mes.info("Requested connection from '%s' to '%s' [ACCEPTED].", this._from, this._to);
+	this._tcp = net.connect( args[1], args[0] );
+
+	// Disable nagle algorithm
+	this._tcp.setTimeout(0)
+	this._tcp.setNoDelay(true)
+
+	this._tcp.on('data', this.serverData.bind(this) );
+	this._tcp.on('close', this.close.bind(this) );
+	this._tcp.on('error', function(error) {
+		console.log(error);
+	});
+	
+	this._tcp.on('connect', this.connectAccept.bind(this) );
+}
+
+
+/**
+ * OnClientData
+ * Client -> Server
+ */
+Proxy.prototype.clientData = function OnServerData(data) {
+	if (!this._tcp) {
+		// wth ? Not initialized yet ?
+		return;
 	}
 
-	/**
-	 * Connect to target server
-	 */
-	connect() {
-		const [host, port] = this.target.split(':');
-
-		mes.info("Requested connection from '%s' to '%s' [ACCEPTED].", this.from, this.target);
-
-		this.tcp = net.connect({
-			port: parseInt(port, 10),
-			host: host,
-			family: 4  // Force IPv4
-		}, () => {
-			mes.status("Connection accepted from '%s'.", this.target);
-		});
-		
-		this.tcp.setTimeout(0);
-		this.tcp.setNoDelay(true);
-		this.tcp.on('data', this.handleServerData.bind(this));
-		this.tcp.on('close', this.close.bind(this));
-		this.tcp.on('error', error => {
-			mes.error("Connection error from '%s': %s", this.target, error.message);
-			this.close();
-		});
+	try {
+		this._tcp.write(data);
 	}
+	catch(e) {}
+}
 
-	/**
-	 * Handle data from client
-	 */
-	handleClientData(data) {
-		if (!this.tcp) return;
-		try {
-			this.tcp.write(data);
-		} catch (e) {
-			mes.error("Error sending to server '%s': %s", this.target, e.message);
-			this.close();
+
+/**
+ * OnServerData
+ * Server -> Client
+ */
+Proxy.prototype.serverData = function OnClientData(data) {
+	this._ws.send(data.toString(), function(error){
+		/*
+		if (error !== null) {
+			OnClose();
 		}
+		*/
+	});
+}
+
+
+/**
+ * OnClose
+ * Clean up events/sockets
+ */
+Proxy.prototype.close = function OnClose() {
+	if (this._tcp) {
+		// mes.info("Connection closed from '%s'.", this._to);
+
+		this._tcp.removeListener('close', this.close.bind(this) );
+		this._tcp.removeListener('error', this.close.bind(this) );
+		this._tcp.removeListener('data',  this.serverData.bind(this) );
+		this._tcp.end();
 	}
 
-	/**
-	 * Handle data from server
-	 */
-	handleServerData(data) {
-		this.ws.send(data, error => {
-			if (error) {
-				mes.error("Error sending to client '%s': %s", this.from, error.message);
-				this.close();
-			}
-		});
-	}
+	if (this._ws) {
+		// mes.info("Connection closed from '%s'.", this._from);
 
-	/**
-	 * Close all connections
-	 */
-	close() {
-		if (this.tcp) {
-			mes.info("Connection closed from '%s'.", this.target);
-			this.tcp.removeAllListeners();
-			this.tcp.end();
-			this.tcp = null;
-		}
-
-		if (this.ws) {
-			mes.info("Connection closed from '%s'.", this.from);
-			this.ws.removeAllListeners();
-			this.ws.close();
-			this.ws = null;
-		}
+		this._ws.removeListener('close',   this.close.bind(this) );
+		this._ws.removeListener('error',   this.close.bind(this) );
+		this._ws.removeListener('message', this.clientData.bind(this) );
+		this._ws.close();
 	}
 }
 
+
+/**
+ * On server accepts connection
+ */
+Proxy.prototype.connectAccept = function OnConnectAccept() {
+	mes.status("Connection accepted from '%s'.", this._to);
+}
+
+/**
+ * Exports
+ */
 module.exports = Proxy;

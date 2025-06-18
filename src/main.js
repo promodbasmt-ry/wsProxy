@@ -1,45 +1,40 @@
 /**
- * Main entry point for the proxy server
+ * Module
  */
-const cluster = require('cluster');
-const Server = require('./server');
-
-class ProxyServer {
+var Main = module.exports = function Init(config)
+{
 	/**
-	 * Initialize the proxy server
+	 * Dependencies
 	 */
-	constructor(config) {
-		this.config = config;
-		this.init();
-	}
-
+	var cluster = require('cluster');
+	
+	
 	/**
-	 * Initialize server(s)
+	 * Invoke workers
 	 */
-	init() {
-		if (cluster.isMaster) {
-			this.initMaster();
-		} else {
-			this.initWorker();
+	if(cluster.isMaster) {
+		for(var i = 0; i < config.workers; i++) {
+			forkWorker(config);
 		}
+		
+		return;
 	}
 
-	/**
-	 * Initialize master process
-	 */
-	initMaster() {
-		// Fork workers
-		for (let i = 0; i < this.config.workers; i++) {
-			cluster.fork({ isWorker: true });
-		}
-	}
 
 	/**
-	 * Initialize worker process
+	 * Server constructor
 	 */
-	initWorker() {
-		new Server(this.config);
+	var Server  = require('./server');
+	
+	var server = new Server(config);
+	
+	
+	/**
+	 * Fork new worker
+	 */
+	function forkWorker(config) {
+		var worker = cluster.fork({
+			isWorker: true
+		});
 	}
 }
-
-module.exports = config => new ProxyServer(config);
